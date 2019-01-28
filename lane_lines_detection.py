@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import glob
+from moviepy.editor import VideoFileClip
 
 
 def mag_threshold(image, sobel_kernel=3, mag_thresh=(0, 255)):
@@ -32,11 +33,6 @@ def calibrate_camera():
     return ret, mtx, dist
 
 
-def undistort(image):
-    ret, mtx, dist = calibrate_camera()
-    return cv2.undistort(image, mtx, dist, None, mtx)
-
-
 def warp_to_bird_eye(img):
     src = np.float32(
         [[571, 468],
@@ -50,10 +46,6 @@ def warp_to_bird_eye(img):
          [img.shape[1] * 3 / 4, 0]])
     m = cv2.getPerspectiveTransform(src, dst)
     return cv2.warpPerspective(img, m, (img.shape[1], img.shape[0]), flags=cv2.INTER_NEAREST), m
-
-
-def s_channel(image):
-    return cv2.cvtColor(image, cv2.COLOR_BGR2HLS)[:, :, 2]
 
 
 def color_threshold(image, thresh=(0, 255)):
@@ -108,6 +100,8 @@ def find_lane_pixels(binary):
 
 def fit_poly(binary):
     left_x, left_y, right_x, right_y, out_img = find_lane_pixels(binary)
+    if len(left_x) < 5 or len(right_x) < 5:
+        raise ValueError("Lane lines are not found")
     left_fit = np.polyfit(left_y, left_x, 2)
     right_fit = np.polyfit(right_y, right_x, 2)
     plot_y = np.linspace(0, binary.shape[0] - 1, binary.shape[0])
@@ -125,32 +119,50 @@ def fit_poly(binary):
     return left_fit_x, right_fit_x, plot_y, out_img
 
 
-undist = undistort(cv2.imread("test_images/test6.jpg"))
-s = s_channel(undist)
-mag_binary = mag_threshold(s, sobel_kernel=5, mag_thresh=(30, 250))
-color_binary = color_threshold(s, thresh=(80, 255))
-rgb_binary = color_threshold(cv2.cvtColor(undist, cv2.COLOR_BGR2GRAY), thresh=(40, 255))
-combined = np.zeros_like(mag_binary)
-combined[(mag_binary == 1) & (color_binary == 1) & (rgb_binary == 1)] = 1
-warped, m = warp_to_bird_eye(combined)
-# Create an image to draw the lines on
-warp_zero = np.zeros_like(warped).astype(np.uint8)
-color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
-left_fit_x, right_fit_x, plot_y, out_img = fit_poly(warped)
+def filter_by_mag_and_color(image):
+    mag_binary = mag_threshold(image, sobel_kernel=5, mag_thresh=(30, 250))
+    color_binary = color_threshold(image, thresh=(40, 255))
+    combined = np.zeros_like(mag_binary)
+    combined[(mag_binary == 1) & (color_binary == 1)] = 1
+    return combined
 
-# Recast the x and y points into usable format for cv2.fillPoly()
-pts_left = np.array([np.transpose(np.vstack([left_fit_x, plot_y]))])
-pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fit_x, plot_y])))])
-pts = np.hstack((pts_left, pts_right))
 
-# Draw the lane onto the warped blank image
-cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
+def process_image(image):
+    s = cv2.cvtColor(image, cv2.COLOR_BGR2HLS)[:, :, 2]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    filtered_gray = filter_by_mag_and_color(gray)
+    filtered_s = filter_by_mag_and_color(s)
+    combined = np.zeros_like(filtered_gray)
+    combined[(filtered_gray == 1) | (filtered_s == 1)] = 1
+    warped, m = warp_to_bird_eye(combined)
+    # plt.imshow(warped, cmap="gray")
+    try:
+        left_fit_x, right_fit_x, plot_y, out_img = fit_poly(warped)
+    except ValueError:
+        return image
 
-# Warp the blank back to original image space using inverse perspective matrix (Minv)
-new_warp = cv2.warpPerspective(color_warp, np.linalg.inv(m), (warped.shape[1], warped.shape[0]))
-# Combine the result with the original image
-result = cv2.addWeighted(undist, 1, new_warp, 0.3, 0)
-# plt.imshow(warped, cmap='gray')
-# plt.imshow(out_img)
-plt.imshow(cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
-plt.show()
+    # Create an image to draw the lines on
+    warp_zero = np.zeros_like(warped).astype(np.uint8)
+    color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+    # Recast the x and y points into usable format for cv2.fillPoly()
+    pts_left = np.array([np.transpose(np.vstack([left_fit_x, plot_y]))])
+    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fit_x, plot_y])))])
+    pts = np.hstack((pts_left, pts_right))
+
+    # Draw the lane onto the warped blank image
+    cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
+
+    # Warp the blank back to original image space using inverse perspective matrix (Minv)
+    new_warp = cv2.warpPerspective(color_warp, np.linalg.inv(m), (warped.shape[1], warped.shape[0]))
+    # Combine the result with the original image
+    # plt.imshow(out_img)
+    return cv2.addWeighted(image, 1, new_warp, 0.3, 0)
+
+
+ret, mtx, dist = calibrate_camera()
+# result = process_image(cv2.undistort(cv2.imread("test_images/test2.jpg"), mtx, dist, None, mtx))
+# plt.imshow(cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
+# plt.show()
+clip = VideoFileClip("project_video.mp4")
+white_clip = clip.fl_image(lambda img: process_image(cv2.undistort(img, mtx, dist, None, mtx)))
+white_clip.write_videofile("output.mp4", audio=False)
