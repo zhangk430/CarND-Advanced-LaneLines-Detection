@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
 import glob
 from moviepy.editor import VideoFileClip
 
@@ -11,16 +10,6 @@ max_averge_frame = 5
 # The left and right polyline fit in the last 5 frames are kept in this list
 previous_left_fits, previous_right_fits = [], []
 lost_frame = 0
-
-
-def mag_threshold(image, sobel_kernel=3, mag_thresh=(0, 255)):
-    sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
-    sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
-    mag_sobel = np.sqrt(sobel_x * sobel_x + sobel_y * sobel_y)
-    scaled_mag = np.uint8(255 * mag_sobel / np.max(mag_sobel))
-    mag_binary = np.zeros_like(scaled_mag)
-    mag_binary[(scaled_mag >= mag_thresh[0]) & (scaled_mag <= mag_thresh[1])] = 1
-    return mag_binary
 
 
 def calibrate_camera():
@@ -42,6 +31,7 @@ def calibrate_camera():
 
 
 def warp_to_bird_eye(img):
+    """Apply the perspective transformation to warp the images to the bird eye view"""
     src = np.float32(
         [[571, 468],
          [244.661, 693.952],
@@ -54,6 +44,16 @@ def warp_to_bird_eye(img):
          [img.shape[1] * 3 / 4, 0]])
     m = cv2.getPerspectiveTransform(src, dst)
     return cv2.warpPerspective(img, m, (img.shape[1], img.shape[0]), flags=cv2.INTER_NEAREST), m
+
+
+def mag_threshold(image, sobel_kernel=3, mag_thresh=(0, 255)):
+    sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
+    sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
+    mag_sobel = np.sqrt(sobel_x * sobel_x + sobel_y * sobel_y)
+    scaled_mag = np.uint8(255 * mag_sobel / np.max(mag_sobel))
+    mag_binary = np.zeros_like(scaled_mag)
+    mag_binary[(scaled_mag >= mag_thresh[0]) & (scaled_mag <= mag_thresh[1])] = 1
+    return mag_binary
 
 
 def color_threshold(image, thresh=(0, 255)):
@@ -108,6 +108,7 @@ def find_lane_pixels(binary):
 
 
 def find_lane_pixels_prior(binary, left_fit, right_fit):
+    """Find the lane pixels based on the previous polyline fit"""
     margin = 50
     nonzero = binary.nonzero()
     nonzeroy = np.array(nonzero[0])
@@ -127,6 +128,7 @@ def curvature(y, fit):
 
 
 def fit_poly(binary):
+    """Calculate the left and right polylines that fit the lane pixels"""
     global left_fit, right_fit, lost_frame
     # If lane line finding is failed for 5 consecutive frame, start over
     if left_fit is None or lost_frame >= 5:
@@ -157,11 +159,6 @@ def fit_poly(binary):
         lost_frame += 1
     left_fit_x = left_fit[0] * plot_y ** 2 + left_fit[1] * plot_y + left_fit[2]
     right_fit_x = right_fit[0] * plot_y ** 2 + right_fit[1] * plot_y + right_fit[2]
-
-    # Plots the left and right polynomials on the lane lines
-    # plt.plot(left_fit_x, plot_y, color='yellow')
-    # plt.plot(right_fit_x, plot_y, color='yellow')
-
     return left_fit_x, right_fit_x, plot_y
 
 
@@ -181,9 +178,10 @@ def process_image(image):
     mag_s_binary = mag_threshold(s, sobel_kernel=5, mag_thresh=(20, 250))
     color_binary = color_threshold(gray, thresh=(40, 255))
     combined = np.zeros_like(gray)
+    # Calculate the binary images by the combination on the sobel magnitude filter on grayscale and s channel
+    # and the color thresholding on the grayscale image
     combined[((mag_s_binary == 1) | (mag_gray_binary == 1)) & (color_binary == 1)] = 1
     warped, m = warp_to_bird_eye(combined)
-    # plt.imshow(warped, cmap="gray")
     try:
         left_fit_x, right_fit_x, plot_y = fit_poly(warped)
     except ValueError:
@@ -204,19 +202,16 @@ def process_image(image):
     y = np.max(plot_y)
     left_curvature = curvature(y, left_fit)
     right_curvature = curvature(y, right_fit)
+    # Draw left and right curvature on the images
     draw_text(image, 'left curvature ' + str(left_curvature), (400, 100))
     draw_text(image, 'right curvature ' + str(right_curvature), (400, 150))
     # Warp the blank back to original image space using inverse perspective matrix (Minv)
     new_warp = cv2.warpPerspective(color_warp, np.linalg.inv(m), (warped.shape[1], warped.shape[0]))
     # Combine the result with the original image
-    # plt.imshow(out_img)
     return cv2.addWeighted(image, 1, new_warp, 0.3, 0)
 
 
 ret, mtx, dist = calibrate_camera()
-# result = process_image(cv2.undistort(cv2.imread("wrong_image.jpg"), mtx, dist, None, mtx))
-# plt.imshow(cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
-# plt.show()
-clip = VideoFileClip("challenge_video.mp4").subclip(0, 10)
+clip = VideoFileClip("project_video.mp4").subclip(0, 10)
 white_clip = clip.fl_image(lambda img: process_image(cv2.undistort(img, mtx, dist, None, mtx)))
-white_clip.write_videofile("output_challenge2.mp4", audio=False)
+white_clip.write_videofile("output_images/output.mp4", audio=False)
