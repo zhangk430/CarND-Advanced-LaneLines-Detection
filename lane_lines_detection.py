@@ -4,8 +4,13 @@ import matplotlib.pyplot as plt
 import glob
 from moviepy.editor import VideoFileClip
 
-
+# The left and right polyline fit
 left_fit, right_fit = None, None
+# We maintain the last 5 frames to compute the average polyline fit
+max_averge_frame = 5
+# The left and right polyline fit in the last 5 frames are kept in this list
+previous_left_fits, previous_right_fits = [], []
+lost_frame = 0
 
 
 def mag_threshold(image, sobel_kernel=3, mag_thresh=(0, 255)):
@@ -103,7 +108,7 @@ def find_lane_pixels(binary):
 
 
 def find_lane_pixels_prior(binary, left_fit, right_fit):
-    margin = 100
+    margin = 50
     nonzero = binary.nonzero()
     nonzeroy = np.array(nonzero[0])
     nonzerox = np.array(nonzero[1])
@@ -116,17 +121,40 @@ def find_lane_pixels_prior(binary, left_fit, right_fit):
     return nonzerox[left_lane_inds], nonzeroy[left_lane_inds], nonzerox[right_lane_inds], nonzeroy[right_lane_inds]
 
 
+def curvature(y, fit):
+    ym_per_pix = 30 / 720  # meters per pixel in y dimension
+    return (1 + (2 * fit[0] * y * ym_per_pix + fit[1]) ** 2) ** 1.5 / (2 * abs(fit[0]))
+
+
 def fit_poly(binary):
-    global left_fit, right_fit
-    if left_fit is None:
+    global left_fit, right_fit, lost_frame
+    # If lane line finding is failed for 5 consecutive frame, start over
+    if left_fit is None or lost_frame >= 5:
         left_x, left_y, right_x, right_y = find_lane_pixels(binary)
     else:
         left_x, left_y, right_x, right_y = find_lane_pixels_prior(binary, left_fit, right_fit)
     if len(left_x) < 5 or len(right_x) < 5:
         raise ValueError("Lane lines are not found")
-    left_fit = np.polyfit(left_y, left_x, 2)
-    right_fit = np.polyfit(right_y, right_x, 2)
+    left_fit_current = np.polyfit(left_y, left_x, 2)
+    right_fit_current = np.polyfit(right_y, right_x, 2)
     plot_y = np.linspace(0, binary.shape[0] - 1, binary.shape[0])
+    y = np.max(plot_y)
+    left_curvature = curvature(y, left_fit_current)
+    right_curvature = curvature(y, right_fit_current)
+    if 0.2 < left_curvature / right_curvature < 5 or left_fit is None:
+        # The left curvature and right curvature are similar, update the polyline, otherwise
+        # use the previous detected polyline
+        if len(previous_left_fits) >= max_averge_frame:
+            previous_left_fits.pop(0)
+        if len(previous_right_fits) >= max_averge_frame:
+            previous_right_fits.pop(0)
+        previous_left_fits.append(left_fit_current)
+        previous_right_fits.append(right_fit_current)
+        left_fit = np.mean(np.array(previous_left_fits), axis=0)
+        right_fit = np.mean(np.array(previous_right_fits), axis=0)
+        lost_frame = 0
+    else:
+        lost_frame += 1
     left_fit_x = left_fit[0] * plot_y ** 2 + left_fit[1] * plot_y + left_fit[2]
     right_fit_x = right_fit[0] * plot_y ** 2 + right_fit[1] * plot_y + right_fit[2]
 
@@ -135,6 +163,15 @@ def fit_poly(binary):
     # plt.plot(right_fit_x, plot_y, color='yellow')
 
     return left_fit_x, right_fit_x, plot_y
+
+
+def draw_text(image, text, bottom_left):
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1
+    font_color = (255, 255, 255)
+    line_type = 2
+    cv2.putText(image, text, bottom_left, font, font_scale, font_color, line_type)
+    return image
 
 
 def process_image(image):
@@ -163,6 +200,12 @@ def process_image(image):
     # Draw the lane onto the warped blank image
     cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
 
+    # Calculate the curvature
+    y = np.max(plot_y)
+    left_curvature = curvature(y, left_fit)
+    right_curvature = curvature(y, right_fit)
+    draw_text(image, 'left curvature ' + str(left_curvature), (400, 100))
+    draw_text(image, 'right curvature ' + str(right_curvature), (400, 150))
     # Warp the blank back to original image space using inverse perspective matrix (Minv)
     new_warp = cv2.warpPerspective(color_warp, np.linalg.inv(m), (warped.shape[1], warped.shape[0]))
     # Combine the result with the original image
@@ -174,6 +217,6 @@ ret, mtx, dist = calibrate_camera()
 # result = process_image(cv2.undistort(cv2.imread("wrong_image.jpg"), mtx, dist, None, mtx))
 # plt.imshow(cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
 # plt.show()
-clip = VideoFileClip("project_video.mp4")
+clip = VideoFileClip("challenge_video.mp4").subclip(0, 10)
 white_clip = clip.fl_image(lambda img: process_image(cv2.undistort(img, mtx, dist, None, mtx)))
-white_clip.write_videofile("output_challenge.mp4", audio=False)
+white_clip.write_videofile("output_challenge2.mp4", audio=False)
