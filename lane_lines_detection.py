@@ -212,6 +212,6 @@ def process_image(image):
 
 
 ret, mtx, dist = calibrate_camera()
-clip = VideoFileClip("project_video.mp4").subclip(0, 10)
+clip = VideoFileClip("project_video.mp4")
 white_clip = clip.fl_image(lambda img: process_image(cv2.undistort(img, mtx, dist, None, mtx)))
 white_clip.write_videofile("output_images/output.mp4", audio=False)
