@@ -5,6 +5,9 @@ import glob
 from moviepy.editor import VideoFileClip
 
 
+left_fit, right_fit = None, None
+
+
 def mag_threshold(image, sobel_kernel=3, mag_thresh=(0, 255)):
     sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
     sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
@@ -56,12 +59,14 @@ def color_threshold(image, thresh=(0, 255)):
 
 def find_lane_pixels(binary):
     nwindows = 9
-    margin = 100
+    margin = 50
     minpix = 50
     bottom_half = binary[binary.shape[0] // 2:, :]
     histogram = np.sum(bottom_half, axis=0)
     mid_point = histogram.shape[0] // 2
-    left_x_current, right_x_current = np.argmax(histogram[0:mid_point]), np.argmax(histogram[mid_point:]) + mid_point
+    start = 100
+    left_x_current, right_x_current =\
+        np.argmax(histogram[start:mid_point]) + start, np.argmax(histogram[mid_point:-start]) + mid_point
     out_img = np.dstack((binary, binary, binary))
     nonzero = binary.nonzero()
     nonzeroy = np.array(nonzero[0])
@@ -94,12 +99,29 @@ def find_lane_pixels(binary):
             right_x_current = np.int(np.mean(right_x_inds))
     left_lane_inds = np.concatenate(left_inds)
     right_lane_inds = np.concatenate(right_inds)
-    return nonzerox[left_lane_inds], nonzeroy[left_lane_inds],\
-        nonzerox[right_lane_inds], nonzeroy[right_lane_inds], out_img
+    return nonzerox[left_lane_inds], nonzeroy[left_lane_inds], nonzerox[right_lane_inds], nonzeroy[right_lane_inds]
+
+
+def find_lane_pixels_prior(binary, left_fit, right_fit):
+    margin = 100
+    nonzero = binary.nonzero()
+    nonzeroy = np.array(nonzero[0])
+    nonzerox = np.array(nonzero[1])
+    left_lane_inds = ((nonzerox > (left_fit[0]*(nonzeroy**2) + left_fit[1]*nonzeroy +
+                      left_fit[2] - margin)) & (nonzerox < (left_fit[0]*(nonzeroy**2) +
+                       left_fit[1]*nonzeroy + left_fit[2] + margin)))
+    right_lane_inds = ((nonzerox > (right_fit[0]*(nonzeroy**2) + right_fit[1]*nonzeroy +
+                       right_fit[2] - margin)) & (nonzerox < (right_fit[0]*(nonzeroy**2) +
+                        right_fit[1]*nonzeroy + right_fit[2] + margin)))
+    return nonzerox[left_lane_inds], nonzeroy[left_lane_inds], nonzerox[right_lane_inds], nonzeroy[right_lane_inds]
 
 
 def fit_poly(binary):
-    left_x, left_y, right_x, right_y, out_img = find_lane_pixels(binary)
+    global left_fit, right_fit
+    if left_fit is None:
+        left_x, left_y, right_x, right_y = find_lane_pixels(binary)
+    else:
+        left_x, left_y, right_x, right_y = find_lane_pixels_prior(binary, left_fit, right_fit)
     if len(left_x) < 5 or len(right_x) < 5:
         raise ValueError("Lane lines are not found")
     left_fit = np.polyfit(left_y, left_x, 2)
@@ -107,37 +129,26 @@ def fit_poly(binary):
     plot_y = np.linspace(0, binary.shape[0] - 1, binary.shape[0])
     left_fit_x = left_fit[0] * plot_y ** 2 + left_fit[1] * plot_y + left_fit[2]
     right_fit_x = right_fit[0] * plot_y ** 2 + right_fit[1] * plot_y + right_fit[2]
-    # Visualization
-    # Colors in the left and right lane regions
-    out_img[left_y, left_x] = [255, 0, 0]
-    out_img[right_y, right_x] = [0, 0, 255]
 
     # Plots the left and right polynomials on the lane lines
     # plt.plot(left_fit_x, plot_y, color='yellow')
     # plt.plot(right_fit_x, plot_y, color='yellow')
 
-    return left_fit_x, right_fit_x, plot_y, out_img
-
-
-def filter_by_mag_and_color(image):
-    mag_binary = mag_threshold(image, sobel_kernel=5, mag_thresh=(30, 250))
-    color_binary = color_threshold(image, thresh=(40, 255))
-    combined = np.zeros_like(mag_binary)
-    combined[(mag_binary == 1) & (color_binary == 1)] = 1
-    return combined
+    return left_fit_x, right_fit_x, plot_y
 
 
 def process_image(image):
     s = cv2.cvtColor(image, cv2.COLOR_BGR2HLS)[:, :, 2]
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    filtered_gray = filter_by_mag_and_color(gray)
-    filtered_s = filter_by_mag_and_color(s)
-    combined = np.zeros_like(filtered_gray)
-    combined[(filtered_gray == 1) | (filtered_s == 1)] = 1
+    mag_gray_binary = mag_threshold(gray, sobel_kernel=5, mag_thresh=(50, 250))
+    mag_s_binary = mag_threshold(s, sobel_kernel=5, mag_thresh=(20, 250))
+    color_binary = color_threshold(gray, thresh=(40, 255))
+    combined = np.zeros_like(gray)
+    combined[((mag_s_binary == 1) | (mag_gray_binary == 1)) & (color_binary == 1)] = 1
     warped, m = warp_to_bird_eye(combined)
     # plt.imshow(warped, cmap="gray")
     try:
-        left_fit_x, right_fit_x, plot_y, out_img = fit_poly(warped)
+        left_fit_x, right_fit_x, plot_y = fit_poly(warped)
     except ValueError:
         return image
 
@@ -160,9 +171,9 @@ def process_image(image):
 
 
 ret, mtx, dist = calibrate_camera()
-# result = process_image(cv2.undistort(cv2.imread("test_images/test2.jpg"), mtx, dist, None, mtx))
+# result = process_image(cv2.undistort(cv2.imread("wrong_image.jpg"), mtx, dist, None, mtx))
 # plt.imshow(cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
 # plt.show()
 clip = VideoFileClip("project_video.mp4")
 white_clip = clip.fl_image(lambda img: process_image(cv2.undistort(img, mtx, dist, None, mtx)))
-white_clip.write_videofile("output.mp4", audio=False)
+white_clip.write_videofile("output_challenge.mp4", audio=False)
