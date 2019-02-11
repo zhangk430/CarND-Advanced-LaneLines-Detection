@@ -10,6 +10,8 @@ max_averge_frame = 5
 # The left and right polyline fit in the last 5 frames are kept in this list
 previous_left_fits, previous_right_fits = [], []
 lost_frame = 0
+ym_per_pix = 30 / 720  # meters per pixel in y dimension
+xm_per_pix = 3.7 / 700  # meters per pixel in y dimension
 
 
 def calibrate_camera():
@@ -123,8 +125,11 @@ def find_lane_pixels_prior(binary, left_fit, right_fit):
 
 
 def curvature(y, fit):
-    ym_per_pix = 30 / 720  # meters per pixel in y dimension
-    return (1 + (2 * fit[0] * y * ym_per_pix + fit[1]) ** 2) ** 1.5 / (2 * abs(fit[0]))
+    return (1 + (2 * fit[0] * y + fit[1]) ** 2) ** 1.5 / (2 * abs(fit[0]))
+
+
+def position(y, fit):
+    return fit[0] * y**2 + fit[1] * y + fit[2]
 
 
 def fit_poly(binary):
@@ -159,7 +164,13 @@ def fit_poly(binary):
         lost_frame += 1
     left_fit_x = left_fit[0] * plot_y ** 2 + left_fit[1] * plot_y + left_fit[2]
     right_fit_x = right_fit[0] * plot_y ** 2 + right_fit[1] * plot_y + right_fit[2]
-    return left_fit_x, right_fit_x, plot_y
+    left_fit_in_meter = np.polyfit(plot_y * ym_per_pix, left_fit_x * xm_per_pix, 2)
+    right_fit_in_meter = np.polyfit(plot_y * ym_per_pix, right_fit_x * xm_per_pix, 2)
+    left_curvature_in_meter = curvature(y * ym_per_pix, left_fit_in_meter)
+    right_curvature_in_meter = curvature(y * ym_per_pix, right_fit_in_meter)
+    lane_center = (position(y, left_fit) + position(y, right_fit)) / 2
+    offset = xm_per_pix * abs(binary.shape[1] / 2 - lane_center)
+    return left_fit_x, right_fit_x, plot_y, left_curvature_in_meter, right_curvature_in_meter, offset
 
 
 def draw_text(image, text, bottom_left):
@@ -183,7 +194,7 @@ def process_image(image):
     combined[((mag_s_binary == 1) | (mag_gray_binary == 1)) & (color_binary == 1)] = 1
     warped, m = warp_to_bird_eye(combined)
     try:
-        left_fit_x, right_fit_x, plot_y = fit_poly(warped)
+        left_fit_x, right_fit_x, plot_y, left_curvature, right_curvature, offset = fit_poly(warped)
     except ValueError:
         return image
 
@@ -200,11 +211,10 @@ def process_image(image):
 
     # Calculate the curvature
     y = np.max(plot_y)
-    left_curvature = curvature(y, left_fit)
-    right_curvature = curvature(y, right_fit)
     # Draw left and right curvature on the images
     draw_text(image, 'left curvature ' + str(left_curvature), (400, 100))
     draw_text(image, 'right curvature ' + str(right_curvature), (400, 150))
+    draw_text(image, 'offset to the lane center ' + str(offset), (400, 200))
     # Warp the blank back to original image space using inverse perspective matrix (Minv)
     new_warp = cv2.warpPerspective(color_warp, np.linalg.inv(m), (warped.shape[1], warped.shape[0]))
     # Combine the result with the original image
