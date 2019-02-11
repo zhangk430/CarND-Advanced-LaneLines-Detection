@@ -11,7 +11,7 @@ max_averge_frame = 5
 previous_left_fits, previous_right_fits = [], []
 lost_frame = 0
 ym_per_pix = 30 / 720  # meters per pixel in y dimension
-xm_per_pix = 3.7 / 700  # meters per pixel in y dimension
+xm_per_pix = 3.7 / 700  # meters per pixel in x dimension
 
 
 def calibrate_camera():
@@ -129,7 +129,7 @@ def curvature(y, fit):
 
 
 def position(y, fit):
-    return fit[0] * y**2 + fit[1] * y + fit[2]
+    return fit[0] * y ** 2 + fit[1] * y + fit[2]
 
 
 def fit_poly(binary):
@@ -162,8 +162,8 @@ def fit_poly(binary):
         lost_frame = 0
     else:
         lost_frame += 1
-    left_fit_x = left_fit[0] * plot_y ** 2 + left_fit[1] * plot_y + left_fit[2]
-    right_fit_x = right_fit[0] * plot_y ** 2 + right_fit[1] * plot_y + right_fit[2]
+    left_fit_x = position(plot_y, left_fit)
+    right_fit_x = position(plot_y, right_fit)
     left_fit_in_meter = np.polyfit(plot_y * ym_per_pix, left_fit_x * xm_per_pix, 2)
     right_fit_in_meter = np.polyfit(plot_y * ym_per_pix, right_fit_x * xm_per_pix, 2)
     left_curvature_in_meter = curvature(y * ym_per_pix, left_fit_in_meter)
